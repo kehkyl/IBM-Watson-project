@@ -1,0 +1,733 @@
+---
+title: "Marketing Analytics project"
+author: "Anoushka Nayak, Kyle Kehoe"
+date: "2023-10-25"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r}
+library(MASS)
+library(ggplot2)
+library(dbscan)
+library(smotefamily)
+library(grid)
+library(gridExtra)
+library(corrplot)
+library(dplyr)
+library(pROC)
+library(dummy)
+library(magrittr)
+library(ROCR)
+library(tidyr)
+```
+
+```{r}
+rm(list=ls())
+setwd("~/Desktop/Marketing Analytics")
+donottouch <- read.csv("Marketing-Customer-Value-Analysis.csv")
+watson <- donottouch
+```
+
+```{r}
+names(watson)
+```
+```{r}
+# Check the missing values in the dataset
+colSums(is.na(watson))
+```
+```{r}
+# Convert Effective.To.Date into a Date object
+watson$Effective.To.Date <- as.Date(watson$Effective.To.Date, format = "%m/%d/%Y")
+```
+
+```{r}
+p1 <- ggplot(watson, aes(x = `Customer.Lifetime.Value`)) +
+  geom_histogram(aes(y = after_stat(density)), fill = 'skyblue', color = 'black', bins = 30) +
+  geom_density(color = 'blue') +
+  ggtitle('Distribution of Customer Lifetime Value')
+
+p2 <- ggplot(watson, aes(x = Income)) +
+  geom_histogram(aes(y = after_stat(density)), fill = 'pink', color = 'black', bins = 30) +
+  geom_density(color = 'maroon') +
+  ggtitle('Distribution of Income')
+
+p3 <- ggplot(watson, aes(x = `Monthly.Premium.Auto`)) +
+  geom_histogram(aes(y = after_stat(density)), fill = 'gold', color = 'black', bins = 30) +
+  geom_density(color = 'darkorange') +
+  ggtitle('Distribution of Monthly Premium Auto')
+
+p4 <- ggplot(watson, aes(x = `Total.Claim.Amount`)) +
+  geom_histogram(aes(y = after_stat(density)), fill = 'lightgreen', color = 'black', bins = 30) +
+  geom_density(color = 'darkgreen') +
+  ggtitle('Distribution of Total Claim Amount')
+
+# Arranging the plots in a 2x2 grid
+grid.arrange(p1, p2, p3, p4, nrow = 2, ncol = 2)
+```
+```{r}
+# Customer Lifetime Value: Appears right-skewed, indicating that a large number of customers have a lower lifetime value, with fewer customers having a very high value.
+# Income: This distribution shows a significant number of entries with zero income, possibly indicating missing or unreported income data. Apart from this, the distribution is fairly uniform.
+# Monthly Premium Auto: The data is somewhat right-skewed, with most customers paying lower premiums, but a few pay significantly more.
+# Total Claim Amount: Also right-skewed, with most claims being on the lower end.
+```
+
+```{r}
+# Determining the correlation between the remaining features (both numeric and categorical)
+```
+
+```{r}
+# Identify numeric columns
+numericColumns <- sapply(watson, is.numeric)
+
+# Keep only numeric columns
+numericData <- watson[, numericColumns]
+```
+
+```{r}
+# Calculate correlation matrix
+correlationMatrix <- cor(numericData, use = "complete.obs")
+
+# View the correlation of features with CLV
+correlationWithCLV <- correlationMatrix["Customer.Lifetime.Value", ]
+print(correlationWithCLV)
+```
+```{r}
+# Plot the correlation matrix
+corrplot(correlationMatrix, method = "circle")
+```
+```{r}
+# Converting the categorical features into numeric to predict the correlation
+# 1. Converting the binary features into 0s and 1s
+watson$Gender <- ifelse(watson$Gender == "M", 1, 0)
+watson$Response <- ifelse(watson$Response == "Yes", 1, 0)
+```
+
+```{r}
+# 2. Using one-hot encoding for multi-category variables
+watson$State <- as.numeric(factor(watson$State))
+watson$Coverage <- as.numeric(factor(watson$Coverage))
+watson$Education <- as.numeric(factor(watson$Education))
+watson$EmploymentStatus <- as.numeric(factor(watson$EmploymentStatus))
+watson$Location.Code <- as.numeric(factor(watson$Location.Code))
+watson$Marital.Status <- as.numeric(factor(watson$Marital.Status))
+watson$Policy.Type <- as.numeric(factor(watson$Policy.Type))
+watson$Policy <- as.numeric(factor(watson$Policy))
+watson$Renew.Offer.Type <- as.numeric(factor(watson$Renew.Offer.Type))
+watson$Sales.Channel <- as.numeric(factor(watson$Sales.Channel))
+watson$Vehicle.Class <- as.numeric(factor(watson$Vehicle.Class))
+watson$Vehicle.Size <- as.numeric(factor(watson$Vehicle.Size))
+```
+
+```{r}
+# 2. Calculate the correlation matrix with the updated dataset
+# First, identify all numeric columns including the newly converted ones
+numericColumns <- sapply(watson, is.numeric)
+```
+
+```{r}
+# Keep only numeric columns
+numericData <- watson[, numericColumns]
+```
+
+```{r}
+# Calculate the new correlation matrix
+correlationMatrix <- cor(numericData, use = "complete.obs")
+```
+
+```{r}
+# View the correlation of features with CLV
+correlationWithCLV <- correlationMatrix["Customer.Lifetime.Value", ]
+print(correlationWithCLV)
+```
+
+```{r}
+# Plot the correlation matrix
+corrplot(correlationMatrix, method = "circle", 
+         type = "upper",   # Set the type to 'upper'
+         tl.cex = 0.6,     # Adjusts the size of the text labels
+         tl.rot = 45,      # Rotates the text labels
+         tl.pos = "dt"     # Places text labels diagonally on top
+         )
+```
+
+# Business Question 1
+# Predict Customer Lifetime Value
+# Resource Allocation: By identifying which customer segments are likely to bring in the most revenue over time, businesses can allocate their resources more effectively. More resources can be dedicated to retaining high-CLV customers and less to those with a lower predicted value, optimizing the return on investment.
+
+```{r}
+ibm <- donottouch
+```
+
+```{r}
+# Convert Effective.To.Date into a Date object
+ibm$Effective.To.Date <- as.Date(ibm$Effective.To.Date, format = "%m/%d/%Y")
+```
+
+```{r}
+# Visualization of categorical values with respect to CLV
+```
+
+```{r}
+clv_by_employment <- ibm %>%
+  group_by(EmploymentStatus) %>%
+  summarize(Average_CLV = mean(`Customer.Lifetime.Value`))
+print(clv_by_employment)
+
+ggplot(clv_by_employment, aes(x = EmploymentStatus, y = Average_CLV, fill = EmploymentStatus)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Average CLV by EmploymentStatus", x = "EmploymentStatus", y = "Average CLV") +
+  theme_minimal()
+```
+
+```{r}
+clv_by_coverage <- ibm %>%
+  group_by(Coverage) %>%
+  summarize(Average_CLV = mean(`Customer.Lifetime.Value`))
+print(clv_by_coverage)
+
+ggplot(clv_by_coverage, aes(x = Coverage, y = Average_CLV, fill = Coverage)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Average CLV by Coverage", x = "Coverage", y = "Average CLV") +
+  theme_minimal()
+```
+```{r}
+ggplot(ibm, aes(x = Customer.Lifetime.Value/100, y = Monthly.Premium.Auto)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "blue") +
+  theme_minimal() +
+  labs(title = "Scatter Plot with Trend Line",
+       x = "Customer Lifetime Value/100",
+       y = "Monthly Premium Auto")
+```
+
+```{r}
+# Convert categorical variables to factors
+categorical_cols <- c('State', 'Response', 'Coverage', 'Education', 'EmploymentStatus', 'Gender', 
+                      'Location.Code', 'Marital.Status', 'Policy.Type', 'Policy', 'Renew.Offer.Type', 
+                      'Sales.Channel', 'Vehicle.Class', 'Vehicle.Size')
+
+ibm[categorical_cols] <- lapply(ibm[categorical_cols], as.factor)
+
+# Convert factors to dummy variables
+ibm <- ibm %>%
+  mutate(across(all_of(categorical_cols), as.factor)) %>%
+  mutate(across(all_of(categorical_cols), ~as.numeric(as.factor(.)))) 
+```
+
+```{r}
+# Creating a new feature to handle the high RMSE
+ibm$InteractionTerm <- ibm$Monthly.Premium.Auto * ibm$Income
+ibm$LogIncome <- log(ibm$Income + 1)
+
+# Normalize numerical features
+num_cols <- c('Income', 'Monthly.Premium.Auto', 'Months.Since.Last.Claim', 
+              'Months.Since.Policy.Inception', 'Number.of.Open.Complaints', 'Number.of.Policies', 'Total.Claim.Amount')
+
+ibm[num_cols] <- scale(ibm[num_cols])
+```
+
+```{r}
+# Removing outliers to improve model accuracy
+upper_limit <- mean(ibm$Customer.Lifetime.Value) + 3*sd(ibm$Customer.Lifetime.Value)
+lower_limit <- mean(ibm$Customer.Lifetime.Value) - 3*sd(ibm$Customer.Lifetime.Value)
+
+ibm <- ibm %>% filter(Customer.Lifetime.Value < upper_limit, Customer.Lifetime.Value > lower_limit)
+```
+
+```{r}
+# Splitting the dataset into training and testing sets
+set.seed(123) # for reproducibility
+sample_size <- floor(0.8 * nrow(ibm))
+train_indices <- sample(seq_len(nrow(ibm)), size = sample_size)
+
+train_data <- ibm[train_indices, ]
+test_data <- ibm[-train_indices, ]
+```
+
+```{r}
+# Exclude the 'Customer' column from the training data
+train_data$Customer <- NULL
+```
+
+```{r}
+model <- lm(Customer.Lifetime.Value ~ ., data = train_data)
+summary(model)
+```
+
+```{r}
+# Multiple R-squared (0.1403): This value indicates the proportion of variance in the dependent variable (Customer Lifetime Value) that can be explained by the independent variables in the model. A value of 0.1403 means that about 14.03% of the variation in customer lifetime value is explained by the model.
+# Adjusted R-squared (0.1374): This is a modified version of R-squared that has been adjusted for the number of predictors in the model. It's always lower than the R-squared. An adjusted R-squared of 0.1374 suggests that after adjusting for the number of predictors, the model explains approximately 13.74% of the variance in the dependent variable.
+# F-statistic and P-value: The F-statistic (48.37) and its corresponding p-value (< 2.2e-16) are used to determine the overall significance of the regression model. A very small p-value (here, less than 2.2e-16) indicates that the model is statistically significant. This means the relationship between the predictors and the dependent variable is not due to random chance.
+```
+
+```{r}
+predictions <- predict(model, newdata = test_data)
+result <- data.frame(Actual = test_data$Customer.Lifetime.Value, Predicted = predictions)
+head(result)
+```
+
+```{r}
+# Calculate RMSE (Root Mean Squared Error)
+RMSE <- sqrt(mean((predictions - test_data$Customer.Lifetime.Value)^2))
+RMSE
+```
+
+# Business Question 2
+# CHURN PREDICTION
+# Analyse which customers are likely to leave (i.e., not renew their policy) by using classification algorithms like logistic regression based on the 'Response' field. 
+# Probability that a customer will be churned.
+# Divide customers into risk categories based on their churn probability to prioritise retention efforts. (Combine the churn predictions with customer  lifetime value to focus retention efforts on high-value customers who are at risk of churning.
+# Predict model performance using ROC_AUC curve.
+
+```{r}
+ibm_watson <- donottouch
+```
+
+```{r}
+# Convert Effective.To.Date into a Date object
+ibm_watson$Effective.To.Date <- as.Date(ibm_watson$Effective.To.Date, format = "%m/%d/%Y")
+```
+
+```{r}
+# Creating a summary of the responses
+response_count <- table(ibm_watson$Response)
+
+# Convert the table to a data frame
+response_df <- as.data.frame(response_count)
+names(response_df) <- c("Response", "Count")
+
+# Calculate percentages
+response_df$Percentage <- response_df$Count / sum(response_df$Count) * 100
+
+# Create a pie chart
+ggplot(response_df, aes(x="", y=Count, fill=Response)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) +
+  theme_void() +
+  geom_text(aes(label=paste0(round(Percentage, 1), "%")), position=position_stack(vjust=0.5)) +
+  labs(fill="Response", title="Response Distribution") +
+  theme(legend.position="bottom")
+```
+
+```{r}
+# Dataset is imbalanced. About 85.68% of  customers are in the 'No' category (not likely to churn), while 14.32% are in the 'Yes' category (likely to churn). In such scenarios, the imbalance can lead to biased model predictions, where the model might overly predict the majority class.
+```
+
+```{r}
+ggplot(ibm_watson, aes(x=Income/1000)) +
+  geom_histogram(binwidth = 10) +
+  facet_grid(~ Response) +
+  labs(title="Income by Response")
+```
+
+```{r}
+ggplot(ibm_watson, aes(x=Gender, fill=Response)) +
+  geom_bar(position="dodge") +
+  labs(title="Response by Gender")
+```
+
+```{r}
+# Response Rate for Different Marketing Campaigns/Offers
+response_by_offer <- ibm_watson %>%
+  group_by(Renew.Offer.Type) %>%
+  summarise(Total_Customers = n(),
+            Responded = sum(ifelse(Response == "Yes", 1, 0)),
+            Response_Rate = (Responded / Total_Customers) * 100) 
+
+# Print the data frame
+print(response_by_offer)
+```
+
+```{r}
+# Data Visualization
+ggplot(response_by_offer, aes(x = Renew.Offer.Type, y = Response_Rate, fill = Renew.Offer.Type)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Response Rate by Renew Offer Type",
+       x = "Renew Offer Type",
+       y = "Response Rate (%)")
+```
+
+```{r}
+# The table generated will show the response rate for each Renew.Offer.Type. By comparing these rates, the business can identify which marketing campaigns or offers are the most effective in terms of eliciting positive responses from customers.
+
+# If one offer type has a very high response rate among a specific segment of customers, future campaigns can be designed to target that segment more aggressively.
+
+# Understanding which campaigns get the most positive responses can also provide insights into customer preferences and behaviors. This information can be used to refine the messaging, targeting, or other aspects of less successful campaigns, making them more effective in subsequent iterations.
+```
+
+```{r}
+# Response Rate for Different Marketing Campaigns/Offers
+response_by_policy <- ibm_watson %>%
+  group_by(Policy) %>%
+  summarise(Total_Customers = n(),
+            Responded = sum(ifelse(Response == "Yes", 1, 0)),
+            Response_Rate = (Responded / Total_Customers) * 100) 
+
+# Print the data frame
+print(response_by_policy)
+```
+
+```{r}
+ggplot(response_by_policy, aes(x = Policy, y = Response_Rate, fill = Policy)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Response Rate by Policy",
+       x = "Policy",
+       y = "Response Rate (%)")
+```
+
+```{r}
+# Convert Response to a binary variable
+ibm_watson$Response <- ifelse(ibm_watson$Response == "Yes", 1, 0)
+```
+
+```{r}
+# Split data into features and target
+# Exclude 'Response' and 'Customer' from the features
+X <- ibm_watson[, !(names(ibm_watson) %in% c("Response", "Customer", "Effective.To.Date", "Marital.Status", "Renew.Offer.Type", "Sales.Channel", "Vehicle.Size"))]
+y <- ibm_watson$Response
+```
+
+```{r}
+# One-hot encoding for categorical variables and remove redundant dummy variables
+X_transformed <- model.matrix(~ . - 1, data = X)
+```
+
+```{r}
+# Splitting data into training and test sets
+set.seed(123)
+indices <- sample(1:nrow(X_transformed), size = 0.8 * nrow(X_transformed))
+X_train <- X_transformed[indices, ]
+X_test <- X_transformed[-indices, ]
+y_train <- y[indices]
+y_test <- y[-indices]
+```
+
+```{r}
+# Combine X_train and y_train for SMOTE
+TrainData <- data.frame(X_train, y = y_train)
+```
+
+```{r}
+# Apply SMOTE to the training data
+TrainData_bal <- SMOTE(TrainData, TrainData$y, K=7, dup_size = 0)$data
+```
+
+```{r}
+# Split the data back into X_train and y_train
+X_train_smote <- TrainData_bal[, names(TrainData_bal) != 'y']
+y_train_smote <- TrainData_bal$y
+```
+
+```{r}
+# Check the structure of the data
+str(X_train_smote)
+str(y_train_smote)
+```
+
+```{r}
+# Ensure y_train_smote is a factor if it's a binary classification
+y_train_smote <- as.factor(y_train_smote)
+```
+
+```{r}
+# Rename 'class' variable if it exists in the training features
+if("class" %in% names(X_train_smote)) {
+    names(X_train_smote)[names(X_train_smote) == "class"] <- "class_variable"
+}
+```
+
+```{r}
+# Identify numeric features
+numeric_features <- sapply(X_train_smote, is.numeric)
+
+# Scale only numeric features
+X_train_smote_scaled <- X_train_smote
+X_train_smote_scaled[numeric_features] <- scale(X_train_smote[numeric_features])
+```
+
+```{r}
+# Create a combined data frame for model training
+train_data_for_model <- data.frame(X_train_smote_scaled, y_train_smote)
+```
+
+```{r}
+# Rename 'class' variable in combined data frame if it exists
+if("class" %in% names(train_data_for_model)) {
+    names(train_data_for_model)[names(train_data_for_model) == "class"] <- "class_variable"
+}
+```
+
+```{r}
+# Train logistic regression model using the SMOTE data
+model <- glm(y_train_smote ~ StateArizona + StateCalifornia + StateNevada + StateOregon + StateWashington + Customer.Lifetime.Value + CoverageExtended + CoveragePremium + EducationCollege + EducationDoctor + EducationHigh.School.or.Below + EducationMaster + EmploymentStatusEmployed + EmploymentStatusMedical.Leave + EmploymentStatusRetired + EmploymentStatusUnemployed + GenderM + Income + Location.CodeSuburban + Location.CodeUrban + Monthly.Premium.Auto + Months.Since.Last.Claim + Months.Since.Policy.Inception + Number.of.Open.Complaints + Number.of.Policies + Policy.TypePersonal.Auto + Policy.TypeSpecial.Auto + PolicyCorporate.L2 + PolicyCorporate.L3 + PolicyPersonal.L1 + PolicyPersonal.L2 + PolicyPersonal.L3 + PolicySpecial.L1 + PolicySpecial.L2 + PolicySpecial.L3 + Total.Claim.Amount + Vehicle.ClassLuxury.Car + Vehicle.ClassLuxury.SUV + Vehicle.ClassSports.Car + Vehicle.ClassSUV + Vehicle.ClassTwo.Door.Car, data = train_data_for_model, family = 'binomial', control = list(maxit = 50))
+```
+
+```{r}
+# Predict and evaluate the model
+predictions_proba <- predict(model, newdata = data.frame(X_test), type = "response")
+predictions_class <- ifelse(predictions_proba > 0.5, 1, 0)
+table(Predicted = predictions_class, Actual = y_test)
+```
+
+```{r}
+# Calculate churn probabilities for the entire dataset
+churn_probabilities <- predict(model, newdata = data.frame(X_transformed), type = "response")
+```
+
+```{r}
+# Categorize customers based on churn probability
+ibm_watson$Churn_Probability <- churn_probabilities
+ibm_watson$Risk_Category <- ifelse(ibm_watson$Churn_Probability < 0.33, 'Low Risk', 
+                             ifelse(ibm_watson$Churn_Probability < 0.66, 'Medium Risk', 'High Risk'))
+```
+
+```{r}
+# Display the results
+head(ibm_watson[c('Customer', 'Churn_Probability', 'Risk_Category')])
+```
+
+```{r}
+# Calculate the percentage of customers in each risk category
+risk_category_counts <- ibm_watson %>%
+    group_by(Risk_Category) %>%
+    summarise(Count = n()) %>%
+    mutate(Percentage = Count / sum(Count) * 100)
+
+# Plotting the percentage of customers in each risk category
+ggplot(risk_category_counts, aes(x = Risk_Category, y = Percentage, fill = Risk_Category)) +
+    geom_bar(stat = "identity") +
+    theme_minimal() +
+    labs(title = "Percentage of Customers by Risk Category",
+         x = "Risk Category",
+         y = "Percentage (%)")
+```
+
+```{r}
+# Ensure y_test is binary
+y_test_binary <- ifelse(y_test == 1, 1, 0)
+
+# Use only the probability of the positive class
+positive_class_proba <- predictions_proba
+
+# Calculating the ROC curve and AUC
+roc_obj <- roc(y_test_binary, positive_class_proba)
+auc_value <- auc(roc_obj)
+
+# Plotting the ROC curve
+plot(roc_obj, main = paste("ROC Curve (AUC =", round(auc_value, 2), ")"))
+```
+
+```{r}
+# Confusion Matrix
+
+# Predict and evaluate the model
+predictions_proba <- predict(model, newdata = data.frame(X_test), type = "response")
+predictions_class <- ifelse(predictions_proba > 0.5, 1, 0)
+
+# Create a confusion matrix
+conf_matrix <- table(Predicted = predictions_class, Actual = y_test)
+print(conf_matrix)
+```
+
+```{r}
+# Precision, Recall, and F1 Score
+precision <- conf_matrix[2,2] / sum(conf_matrix[2,])
+recall <- conf_matrix[2,2] / sum(conf_matrix[,2])
+f1_score <- 2 * precision * recall / (precision + recall)
+```
+
+```{r}
+# Print Precision, Recall, and F1 Score
+print(paste("Precision:", precision))
+print(paste("Recall:", recall))
+print(paste("F1 Score:", f1_score))
+```
+
+```{r}
+# Customer Retention Efforts: If the model is used to identify customers with potentially high CLV for retention efforts, high recall might be more important. In this case, you'd want to cast a wider net to ensure no high-value customer is overlooked, even if it means including some lower-value customers in the retention strategies.
+```
+
+#Clustering
+#How can the prediction be utilized to tailor marketing strategies and customer engagement programs for different segments of our customer base ?
+
+```{r}
+ibm_cluster<-donottouch
+ibm_cluster$State <- as.numeric(factor(ibm_cluster$State))
+
+ibm_cluster$Coverage <- as.numeric(factor(ibm_cluster$Coverage))
+
+ibm_cluster$Education <- as.numeric(factor(ibm_cluster$Education))
+
+ibm_cluster$EmploymentStatus <- as.numeric(factor(ibm_cluster$EmploymentStatus))
+
+ibm_cluster$Male <- ifelse(ibm_cluster$Gender=="M", 1, 0)
+ibm_cluster$Female <- ifelse(ibm_cluster$Gender=="F", 1, 0)
+ibm_cluster$Gender <- NULL
+
+ibm_cluster$Location.Code <- as.numeric(factor(ibm_cluster$Location.Code))
+
+ibm_cluster$Marital.Status <- as.numeric(factor(ibm_cluster$Marital.Status))
+
+ibm_cluster$Policy.Type <- as.numeric(factor(ibm_cluster$Policy.Type))
+
+ibm_cluster$Policy <- as.numeric(factor(ibm_cluster$Policy))
+
+ibm_cluster$Vehicle.Class <- as.numeric(factor(ibm_cluster$Vehicle.Class))
+
+ibm_cluster$Vehicle.Size <- as.numeric(factor(ibm_cluster$Vehicle.Size))
+
+ibm_cluster$Customer <- NULL
+ibm_cluster$Response <- NULL
+ibm_cluster$Effective.To.Date <- NULL
+ibm_cluster$Renew.Offer.Type <- NULL
+ibm_cluster$Sales.Channel <- NULL
+ibm_cluster$Total.Claim.Amount <- NULL
+```
+
+```{r}
+head(ibm_cluster)
+```
+
+```{r}
+basisvars <- names(ibm_cluster)
+```
+
+```{r}
+#check for 0 variance remove those columns
+diag(var(ibm_cluster[,basisvars]))
+```
+
+```{r}
+#kmeans
+# k=2
+set.seed(321)
+km2 <- kmeans(ibm_cluster[,basisvars], 2)
+ibm_cluster[,'seg']=km2$cluster
+cbind(km2$size,km2$centers)
+# k=3
+set.seed(321)
+km3 <- kmeans(ibm_cluster[,basisvars], 3)
+ibm_cluster[,'seg']=km3$cluster
+cbind(km3$size,km3$centers)
+# k=4
+set.seed(321)
+km4 <- kmeans(ibm_cluster[,basisvars], 4)
+ibm_cluster[,'seg']=km4$cluster
+cbind(km4$size,km4$centers)
+# k=5
+set.seed(321)
+km5 <- kmeans(ibm_cluster[,basisvars], 5)
+ibm_cluster[,'seg']=km5$cluster
+cbind(km5$size,km5$centers)
+```
+
+```{r}
+maxnum = 20
+# Create a data.frame to stall the SSE for each number of clusters
+winss = data.frame('Clusters'=c(1:maxnum),'SSE'=rep(0,maxnum))
+for (i in 1:maxnum)
+winss[i,2] = kmeans(ibm_cluster[,basisvars], i)$tot.withinss
+# Make the plot and find the "elbow"
+ggplot(winss, aes(x=Clusters, y=SSE, group)) +
+geom_line() +
+geom_point()
+11
+```
+
+```{r}
+d=dist(head(ibm_cluster,50),method="euclidian")
+fit = hclust(d,method="ward.D")
+plot(fit)
+14
+```
+#somewhere between 3-4 seems like a good # of clusters let's do a PCA then visualize 
+
+```{r}
+# k=3
+set.seed(321)
+km3 <- kmeans(ibm_cluster[,basisvars], 3)
+ibm_cluster[,'seg']=km3$cluster
+cbind(km3$size,km3$centers)
+```
+
+```{r}
+
+pca_result <- prcomp(ibm_cluster[, basisvars], scale. = TRUE)
+
+pc1 <- pca_result$x[, 1]
+pc2 <- pca_result$x[, 2]
+
+plot_data <- data.frame(PC1 = pc1, PC2 = pc2, Cluster = as.factor(km3$cluster))
+
+ggplot(plot_data, aes(x = PC1, y = PC2, color = Cluster)) +
+  geom_point() +
+  ggtitle("K-means Clustering (k = 3)") +
+  xlab("Principal Component 1") +
+  ylab("Principal Component 2") +
+  theme_minimal()
+```
+
+```{r}
+# k=4
+set.seed(321)
+km4 <- kmeans(ibm_cluster[,basisvars], 4)
+ibm_cluster[,'seg']=km4$cluster
+cbind(km4$size,km4$centers)
+```
+
+```{r}
+pca_result <- prcomp(ibm_cluster[, basisvars], scale. = TRUE)
+
+pc1 <- pca_result$x[, 1]
+pc2 <- pca_result$x[, 2]
+
+plot_data <- data.frame(PC1 = pc1, PC2 = pc2, Cluster = as.factor(km4$cluster))
+
+ggplot(plot_data, aes(x = PC1, y = PC2, color = Cluster)) +
+  geom_point() +
+  ggtitle("K-means Clustering (k = 4)") +
+  xlab("Principal Component 1") +
+  ylab("Principal Component 2") +
+  theme_minimal()
+```
+
+```{r}
+eps_values <- seq(0.1, 1.0, by = 0.1)
+minPts_values <- c(3, 5, 7, 10)
+
+results_df <- data.frame(eps = numeric(), minPts = numeric(), clusters = numeric())
+
+for (eps in eps_values) {
+  for (minPts in minPts_values) {
+    dbscan_result <- dbscan(ibm_cluster[, basisvars], eps = eps, minPts = minPts)
+
+    num_clusters <- max(dbscan_result$cluster)
+
+    results_df <- rbind(results_df, data.frame(eps = eps, minPts = minPts, clusters = num_clusters))
+  }
+}
+
+print(results_df)
+```
+
+```{r}
+dbscan_result <- dbscan(ibm_cluster[, basisvars], eps = 1, minPts = 5)
+
+ibm_cluster$cluster <- dbscan_result$cluster
+
+pca_result <- prcomp(ibm_cluster[, basisvars], scale. = TRUE)
+
+pc1 <- pca_result$x[, 1]
+pc2 <- pca_result$x[, 2]
+# Visualize the clusters
+ggplot(ibm_cluster, aes(x = pc1, y = pc2, color = as.factor(cluster))) +
+  geom_point() +
+  ggtitle("DBSCAN Clustering") +
+  xlab("Principal Component 1") +
+  ylab("Principal Component 2") +
+  theme_minimal()
+```
